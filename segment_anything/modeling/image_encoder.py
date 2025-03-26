@@ -8,10 +8,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from dyT import DynamicTanh
 from typing import Optional, Tuple, Type
 
-from .common import LayerNorm2d, MLPBlock
+from common import LayerNorm2d, MLPBlock
 
 
 # This class and its supporting functions below lightly adapted from the ViTDet backbone available at: https://github.com/facebookresearch/detectron2/blob/main/detectron2/modeling/backbone/vit.py # noqa
@@ -80,7 +80,7 @@ class ImageEncoderViT(nn.Module):
                 mlp_ratio=mlp_ratio,
                 qkv_bias=qkv_bias,
                 norm_layer=norm_layer,
-                act_layer=act_layer,
+                act_layer=DynamicTanh,
                 use_rel_pos=use_rel_pos,
                 rel_pos_zero_init=rel_pos_zero_init,
                 window_size=window_size if i not in global_attn_indexes else 0,
@@ -95,7 +95,7 @@ class ImageEncoderViT(nn.Module):
                 kernel_size=1,
                 bias=False,
             ),
-            LayerNorm2d(out_chans),
+            DynamicTanh(out_chans),
             nn.Conv2d(
                 out_chans,
                 out_chans,
@@ -103,7 +103,7 @@ class ImageEncoderViT(nn.Module):
                 padding=1,
                 bias=False,
             ),
-            LayerNorm2d(out_chans),
+            DynamicTanh(out_chans),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -418,3 +418,43 @@ class PatchEmbed(nn.Module):
         # B C H W -> B H W C
         x = x.permute(0, 2, 3, 1)
         return x
+
+
+
+" Random Test Script to see if my code is working"
+def test_patch_embed():
+    """
+    Test case to verify PatchEmbed functionality
+    """
+    
+    batch_size = 2
+    in_channels = 3
+    img_size = 256
+    x = torch.randn(batch_size, in_channels, img_size, img_size)
+
+    
+    patch_size = 16
+    embed_dim = 768
+    patch_embed = PatchEmbed(
+        kernel_size=(patch_size, patch_size),
+        stride=(patch_size, patch_size),
+        in_chans=in_channels,
+        embed_dim=embed_dim
+    )
+
+    
+    out = patch_embed(x)
+
+    
+    expected_size = img_size // patch_size
+    assert out.shape == (batch_size, expected_size, expected_size, embed_dim), \
+        f"Expected shape {(batch_size, expected_size, expected_size, embed_dim)}, got {out.shape}"
+
+    print("PatchEmbed test passed!")
+    return out
+
+
+if __name__ == "__main__":
+    test_patch_embed()
+
+
