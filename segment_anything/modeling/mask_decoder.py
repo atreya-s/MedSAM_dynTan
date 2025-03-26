@@ -8,10 +8,10 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-
+from dyT import DynamicTanh
 from typing import List, Tuple, Type
 
-from .common import LayerNorm2d
+from common import LayerNorm2d
 
 
 class MaskDecoder(nn.Module):
@@ -55,12 +55,12 @@ class MaskDecoder(nn.Module):
             nn.ConvTranspose2d(
                 transformer_dim, transformer_dim // 4, kernel_size=2, stride=2
             ),
-            LayerNorm2d(transformer_dim // 4),
+            DynamicTanh(transformer_dim // 4, channels_last=False),
             activation(),
             nn.ConvTranspose2d(
                 transformer_dim // 4, transformer_dim // 8, kernel_size=2, stride=2
             ),
-            activation(),
+            activation()
         )
         self.output_hypernetworks_mlps = nn.ModuleList(
             [
@@ -146,7 +146,7 @@ class MaskDecoder(nn.Module):
         mask_tokens_out = hs[:, 1 : (1 + self.num_mask_tokens), :]
 
         # Upscale mask embeddings and predict masks using the mask tokens
-        src = src.transpose(1, 2).view(b, c, h, w)
+        src = src.transpose(1, 2).contiguous().view(b, c, h, w)
         upscaled_embedding = self.output_upscaling(src)
         hyper_in_list: List[torch.Tensor] = []
         for i in range(self.num_mask_tokens):
@@ -188,3 +188,69 @@ class MLP(nn.Module):
         if self.sigmoid_output:
             x = F.sigmoid(x)
         return x
+
+def test_decode():
+    """
+    Test case to verify mask_decoder functionality with DynamicTanh
+    """
+    batch_size = 2
+    transformer_dim = 256
+    img_size = 64  # Size after image encoder
+    
+    # Create proper dummy transformer
+    class DummyTransformer(nn.Module):
+        def forward(self, src, pos_src, tokens):
+            # Return dummy outputs matching expected shapes
+            b = src.shape[0]
+            # hs should have shape [batch, num_tokens, transformer_dim]
+            hs = torch.randn(b, tokens.shape[1], transformer_dim)
+            # src should maintain its input shape
+            return hs, src
+    
+    # Create decoder with dummy transformer
+    mask_decoder = MaskDecoder(
+        transformer_dim=transformer_dim,
+        transformer=DummyTransformer()
+    )
+    
+    # Verify DynamicTanh is in the model
+    has_dyt = False
+    for name, module in mask_decoder.named_modules():
+        if isinstance(module, DynamicTanh):
+            has_dyt = True
+            print(f"Found DynamicTanh in MaskDecoder at: {name}")
+            print(f"DynamicTanh parameters: {module.extra_repr()}")
+            break
+    
+    assert has_dyt, "DynamicTanh not found in MaskDecoder"
+    
+    # Test forward pass
+    image_embeddings = torch.randn(batch_size, transformer_dim, img_size, img_size)
+    image_pe = torch.randn(batch_size, transformer_dim, img_size, img_size)
+    sparse_prompt_embeddings = torch.randn(batch_size, 2, transformer_dim)  # 2 prompt tokens
+    dense_prompt_embeddings = torch.randn(batch_size, transformer_dim, img_size, img_size)
+    
+    masks, iou_pred = mask_decoder(
+        image_embeddings=image_embeddings,
+        image_pe=image_pe,
+        sparse_prompt_embeddings=sparse_prompt_embeddings,
+        dense_prompt_embeddings=dense_prompt_embeddings,
+        multimask_output=True
+    )
+    
+    expected_mask_size = img_size * 4  # Due to 4x upscaling in output_upscaling
+    assert masks.shape == (batch_size, 3, expected_mask_size, expected_mask_size), \
+        f"Expected mask shape {(batch_size, 3, expected_mask_size, expected_mask_size)}, got {masks.shape}"
+    assert iou_pred.shape == (batch_size, 3), \
+        f"Expected IOU shape {(batch_size, 3)}, got {iou_pred.shape}"
+    
+    # Check if values are within expected range for tanh activation
+    assert torch.all(masks <= 1.0) and torch.all(masks >= -1.0), \
+        "Mask values outside expected range for tanh-based activation"
+    
+    print("MaskDecoder with DynamicTanh test passed!")
+    return masks, iou_pred
+
+
+if __name__ == "__main__":
+    test_decode()
