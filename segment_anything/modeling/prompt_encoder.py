@@ -10,8 +10,8 @@ import torch
 from torch import nn
 
 from typing import Any, Optional, Tuple, Type
-
-from .common import LayerNorm2d
+from dyT import DynamicTanh
+from common import LayerNorm2d
 
 
 class PromptEncoder(nn.Module):
@@ -56,10 +56,10 @@ class PromptEncoder(nn.Module):
         )
         self.mask_downscaling = nn.Sequential(
             nn.Conv2d(1, mask_in_chans // 4, kernel_size=2, stride=2),
-            LayerNorm2d(mask_in_chans // 4),
+            DynamicTanh(mask_in_chans // 4, channels_last=False),
             activation(),
             nn.Conv2d(mask_in_chans // 4, mask_in_chans, kernel_size=2, stride=2),
-            LayerNorm2d(mask_in_chans),
+            DynamicTanh(mask_in_chans, channels_last=False),
             activation(),
             nn.Conv2d(mask_in_chans, embed_dim, kernel_size=1),
         )
@@ -224,3 +224,90 @@ class PositionEmbeddingRandom(nn.Module):
         coords[:, :, 0] = coords[:, :, 0] / image_size[1]
         coords[:, :, 1] = coords[:, :, 1] / image_size[0]
         return self._pe_encoding(coords.to(torch.float))  # B x N x C
+
+def test_prompt():
+    batch_size = 2
+    embed_dim = 256
+    image_embedding_size = (64, 64)
+    input_image_size = (1024, 1024)
+    mask_in_chans = 16
+    
+    print("Initializing PromptEncoder...")
+    # Initialize the prompt encoder
+    prompt_encoder = PromptEncoder(
+        embed_dim=embed_dim,
+        image_embedding_size=image_embedding_size,
+        input_image_size=input_image_size,
+        mask_in_chans=mask_in_chans
+    )
+    
+    # Test with point prompts
+    points = torch.rand(batch_size, 5, 2) * input_image_size[0]  # 5 random points per batch
+    labels = torch.randint(-1, 2, (batch_size, 5))  # Random labels (-1, 0, 1)
+    
+    # Test with box prompts
+    boxes = torch.rand(batch_size, 2, 2) * input_image_size[0]  # 2 corners per box
+    
+    # Test with mask prompts
+    masks = torch.rand(batch_size, 1, 4*image_embedding_size[0], 4*image_embedding_size[1])
+    
+    print("\n=== Testing with all prompt types ===")
+    # Forward pass with all prompt types
+    sparse_embeddings, dense_embeddings = prompt_encoder(
+        points=(points, labels),
+        boxes=boxes,
+        masks=masks
+    )
+    
+    print(f"Sparse embeddings shape: {sparse_embeddings.shape}")
+    print(f"Sparse embeddings min/max/mean: {sparse_embeddings.min():.4f}/{sparse_embeddings.max():.4f}/{sparse_embeddings.mean():.4f}")
+    print(f"Dense embeddings shape: {dense_embeddings.shape}")
+    print(f"Dense embeddings min/max/mean: {dense_embeddings.min():.4f}/{dense_embeddings.max():.4f}/{dense_embeddings.mean():.4f}")
+    
+    print("\n=== Testing with only points ===")
+    # Forward pass with only points
+    sparse_point_only, dense_point_only = prompt_encoder(
+        points=(points, labels),
+        boxes=None,
+        masks=None
+    )
+    
+    print(f"Point-only sparse embeddings shape: {sparse_point_only.shape}")
+    print(f"Point-only sparse min/max/mean: {sparse_point_only.min():.4f}/{sparse_point_only.max():.4f}/{sparse_point_only.mean():.4f}")
+    print(f"Point-only dense embeddings shape: {dense_point_only.shape}")
+    
+    print("\n=== Testing with only boxes ===")
+    # Forward pass with only boxes
+    sparse_box_only, dense_box_only = prompt_encoder(
+        points=None,
+        boxes=boxes,
+        masks=None
+    )
+    
+    print(f"Box-only sparse embeddings shape: {sparse_box_only.shape}")
+    print(f"Box-only sparse min/max/mean: {sparse_box_only.min():.4f}/{sparse_box_only.max():.4f}/{sparse_box_only.mean():.4f}")
+    print(f"Box-only dense embeddings shape: {dense_box_only.shape}")
+    
+    print("\n=== Testing with only masks ===")
+    # Forward pass with only masks
+    sparse_mask_only, dense_mask_only = prompt_encoder(
+        points=None,
+        boxes=None,
+        masks=masks
+    )
+    
+    print(f"Mask-only sparse embeddings shape: {sparse_mask_only.shape}")
+    print(f"Mask-only dense embeddings shape: {dense_mask_only.shape}")
+    print(f"Mask-only dense min/max/mean: {dense_mask_only.min():.4f}/{dense_mask_only.max():.4f}/{dense_mask_only.mean():.4f}")
+    
+    # Test positional encoding
+    print("\n=== Testing positional encoding ===")
+    dense_pe = prompt_encoder.get_dense_pe()
+    print(f"Dense positional encoding shape: {dense_pe.shape}")
+    print(f"Dense PE min/max/mean: {dense_pe.min():.4f}/{dense_pe.max():.4f}/{dense_pe.mean():.4f}")
+    
+    return prompt_encoder
+
+if __name__ == "__main__":
+    test_prompt()
+    
